@@ -263,6 +263,8 @@ function calcular() {
   document.getElementById('val-rentab').textContent = (tasaAnual * 100).toFixed(1).replace('.', ',') + '%';
   document.getElementById('val-aport').textContent = aportacionMensual.toLocaleString('es-ES') + ' €';
   document.getElementById('val-anos').textContent = anos + ' año' + (anos > 1 ? 's' : '');
+  // Plusvalía latente de las posiciones, tal como la calcula la hoja (R16)
+  const plusvaliaActual = datos.plusvalia != null ? datos.plusvalia : valorInicial - capitalAportado;
   let valor = valorInicial;
   let totalAportado = capitalAportado;
   const rows = [];
@@ -271,13 +273,13 @@ function calcular() {
     const mesesEsteAno = anio === 1 ? MESES_PRIMER_ANO : 12;
     for (let mes = 1; mes <= mesesEsteAno; mes++) { valor = valor * (1 + tasaMensual) + aportacionMensual; totalAportado += aportacionMensual; }
     totalMeses += mesesEsteAno;
-    const plusvalia = valor - totalAportado;
-    rows.push({ anio, totalAportado, valor, plusvalia, rentab: plusvalia / totalAportado, mult: valor / totalAportado });
+    // Plusvalía como en la hoja (R16): la actual más lo ganado desde hoy
+    const plusvalia = plusvaliaActual + (valor - valorInicial - (totalAportado - capitalAportado));
+    // Rentabilidad y multiplicador sobre el dinero aportado, como la rentabilidad simple de la hoja (S16)
+    rows.push({ anio, totalAportado, valor, plusvalia, rentab: (valor - totalAportado) / totalAportado, mult: valor / totalAportado });
   }
   const final = rows[rows.length - 1];
   const aportacionesPuras = aportacionMensual * totalMeses;
-  // Plusvalía latente de las posiciones, tal como la calcula la hoja (R16)
-  const plusvaliaActual = datos.plusvalia != null ? datos.plusvalia : valorInicial - capitalAportado;
   const plusvaliaFutura = final.valor - valorInicial - aportacionesPuras;
   const anoFinal = ANO_INICIO + anos - 1;
   document.getElementById('kpi-aportado').textContent = fmt(final.totalAportado);
