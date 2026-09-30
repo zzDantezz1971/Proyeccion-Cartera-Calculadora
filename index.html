@@ -61,7 +61,6 @@
   .bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s; }
   .bar-base { background: #3b82f6; }
   .bar-aport { background: #a78bfa; }
-  .bar-plus-act { background: #22c55e; }
   .bar-plus { background: #4ade80; }
 
   .table-wrap { background: #1a1d27; border-radius: 12px; padding: 16px; border: 1px solid #2a2d3a; overflow-x: auto; }
@@ -178,7 +177,7 @@ function parseCSV(texto) {
 }
 
 // Busca los valores por sus etiquetas (no por posición), para que no se rompa si se mueven filas.
-// Equivalen a ValorTotal (Q16), Base Total del total general (O16) y RentabTIR (S17).
+// Equivalen a los intervalos con nombre ValorTotal (Q16), Plusvalia (R16), RentabTIR (S17) y BaseTotal (O18, junto a "BBVA:").
 function extraerDatos(filas) {
   const celda = (f, c) => (filas[f] && filas[f][c] != null ? filas[f][c].trim() : '');
   const buscar = etiqueta => {
@@ -188,19 +187,22 @@ function extraerDatos(filas) {
     return null;
   };
   const cabValor = buscar('Valor fondo');
-  const cabBase = buscar('Base Total');
+  const cabPlus = buscar('Plusvalia');
   const tir = buscar('TIR');
-  if (!cabValor || !cabBase || !tir) throw new Error('No se encuentran las etiquetas esperadas en la hoja');
+  const bbva = buscar('BBVA:');
+  if (!cabValor || !cabPlus || !tir || !bbva) throw new Error('No se encuentran las etiquetas esperadas en la hoja');
 
   const filaTotal = tir.f - 1; // la fila del total general está justo encima de "TIR"
   const valorPosiciones = parseNum(celda(filaTotal, cabValor.c));
-  const capitalAportado = parseNum(celda(filaTotal, cabBase.c));
+  const plusvalia = parseNum(celda(filaTotal, cabPlus.c));
+  const capitalAportado = parseNum(celda(bbva.f, bbva.c + 1));
   const rentabTIR = parseNum(celda(tir.f, tir.c + 1));
 
   if (!(valorPosiciones > 0) || !(capitalAportado > 0)) throw new Error('Los valores leídos de la hoja no son válidos');
   return {
     valorPosiciones,
     capitalAportado,
+    plusvalia: isNaN(plusvalia) ? null : plusvalia,
     rentabTIR: isNaN(rentabTIR) ? null : rentabTIR,
     fecha: new Date().toISOString(),
   };
@@ -274,7 +276,8 @@ function calcular() {
   }
   const final = rows[rows.length - 1];
   const aportacionesPuras = aportacionMensual * totalMeses;
-  const plusvaliaActual = valorInicial - capitalAportado;
+  // Plusvalía latente de las posiciones, tal como la calcula la hoja (R16)
+  const plusvaliaActual = datos.plusvalia != null ? datos.plusvalia : valorInicial - capitalAportado;
   const plusvaliaFutura = final.valor - valorInicial - aportacionesPuras;
   const anoFinal = ANO_INICIO + anos - 1;
   document.getElementById('kpi-aportado').textContent = fmt(final.totalAportado);
@@ -295,9 +298,8 @@ function calcular() {
     <div class="summary-row"><span class="summary-label">Multiplicador — cada € aportado vale...</span><span class="mult-badge">${fmtMult(final.mult)}</span></div>`;
   const maxV = final.valor;
   document.getElementById('bars').innerHTML = [
-    { label: 'Capital aportado hasta hoy', val: capitalAportado, cls: 'bar-base' },
+    { label: 'Valor actual de la cartera', val: valorInicial, cls: 'bar-base' },
     { label: 'Aportaciones mensuales futuras', val: aportacionesPuras, cls: 'bar-aport' },
-    { label: 'Plusvalía actual', val: plusvaliaActual, cls: 'bar-plus-act' },
     { label: 'Plusvalía futura (interés compuesto)', val: plusvaliaFutura, cls: 'bar-plus' },
   ].map(item => { const pct = Math.max(0, (item.val / maxV * 100)).toFixed(1); return `<div class="bar-row"><div class="bar-label"><span>${item.label}</span><span>${fmt(item.val)} (${pct}%)</span></div><div class="bar-track"><div class="bar-fill ${item.cls}" style="width:${pct}%"></div></div></div>`; }).join('');
   document.getElementById('table-body').innerHTML = rows.map((r, i) => {
