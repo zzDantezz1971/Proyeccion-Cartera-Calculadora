@@ -20,6 +20,8 @@
   body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e0e0e0; padding: 20px; }
   h1 { font-size: 1.2rem; color: #fff; margin-bottom: 4px; }
   .subtitle { font-size: 0.75rem; color: #888; margin-bottom: 20px; }
+  .subtitle.aviso { color: #fbbf24; }
+  .subtitle.error { color: #f87171; }
 
   .controls { background: #1a1d27; border-radius: 12px; padding: 18px; margin-bottom: 20px; border: 1px solid #2a2d3a; }
   .controls-title { font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
@@ -76,7 +78,9 @@
 </head>
 <body>
 <h1>📈 Proyección de Cartera</h1>
-<p class="subtitle">Capital inicial: 26.650 € (fuente: hoja "Cartera inversiones", celda O21, 12/08/2026) · Aportaciones mensuales desde agosto 2026 · Ajusta los parámetros con los controles</p>
+<p class="subtitle" id="estado-datos">Leyendo datos de la hoja "Cartera inversiones"…</p>
+
+<div id="contenido" style="display:none">
 
 <div class="controls">
   <div class="controls-title">⚙️ Parámetros ajustables</div>
@@ -118,15 +122,140 @@
     <tbody id="table-body"></tbody>
   </table>
 </div>
+</div>
 
 <script>
-const CAPITAL_INICIAL = 26650;
-const ANO_INICIO = 2026;
-const MESES_PRIMER_ANO = 5; // agosto a diciembre 2026
+// Pestaña "Cartera" de la hoja "Cartera inversiones", publicada en la web como CSV
+const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTZ6yiNNd0tk3SPTg2cOPNolIttJLmiFqEgmy2vnUTbTWLWhzeFhDwJvolPvCePNJc3I_nnApbmP3Pm/pub?gid=1997677870&single=true&output=csv';
+const CACHE_KEY = 'proyeccion-cartera-datos';
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+// Datos de la cartera: se rellenan al leer la hoja (o desde la última lectura guardada)
+let datos = null;
+
+// La proyección empieza el mes siguiente al actual (la aportación de este mes ya está en el valor actual)
+const hoy = new Date();
+let MES_INICIO = hoy.getMonth() + 1; // 0 = enero
+let ANO_INICIO = hoy.getFullYear();
+if (MES_INICIO === 12) { MES_INICIO = 0; ANO_INICIO++; }
+const MESES_PRIMER_ANO = 12 - MES_INICIO;
+
 function fmt(n) { return n.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' €'; }
 function fmtPct(n) { return (n * 100).toFixed(1).replace('.', ',') + '%'; }
 function fmtMult(n) { return 'x' + n.toFixed(2).replace('.', ','); }
+
+// Convierte "31.120,40 €", "11,81%", "-438,96 €" o "31120.4" en número
+function parseNum(txt) {
+  if (txt == null) return NaN;
+  let s = String(txt).replace(/[€$\s ]/g, '');
+  const pct = s.endsWith('%');
+  if (pct) s = s.slice(0, -1);
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(s);
+  return pct ? n / 100 : n;
+}
+
+function parseCSV(texto) {
+  const filas = [];
+  let fila = [], campo = '', comillas = false;
+  for (let i = 0; i < texto.length; i++) {
+    const c = texto[i];
+    if (comillas) {
+      if (c === '"' && texto[i + 1] === '"') { campo += '"'; i++; }
+      else if (c === '"') comillas = false;
+      else campo += c;
+    } else if (c === '"') comillas = true;
+    else if (c === ',') { fila.push(campo); campo = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && texto[i + 1] === '\n') i++;
+      fila.push(campo); filas.push(fila); fila = []; campo = '';
+    } else campo += c;
+  }
+  if (campo || fila.length) { fila.push(campo); filas.push(fila); }
+  return filas;
+}
+
+// Busca los valores por sus etiquetas (no por posición), para que no se rompa si se mueven filas.
+// Equivalen a los intervalos con nombre ValorTotal (Q16), Plusvalia (R16), RentabTIR (S17) y BaseTotal (O18, junto a "BBVA:").
+function extraerDatos(filas) {
+  const celda = (f, c) => (filas[f] && filas[f][c] != null ? filas[f][c].trim() : '');
+  const buscar = etiqueta => {
+    for (let f = 0; f < filas.length; f++)
+      for (let c = 0; c < filas[f].length; c++)
+        if (celda(f, c).toLowerCase() === etiqueta.toLowerCase()) return { f, c };
+    return null;
+  };
+  const cabValor = buscar('Valor fondo');
+  const cabPlus = buscar('Plusvalia');
+  const tir = buscar('TIR');
+  const bbva = buscar('BBVA:');
+  if (!cabValor || !cabPlus || !tir || !bbva) throw new Error('No se encuentran las etiquetas esperadas en la hoja');
+
+  const filaTotal = tir.f - 1; // la fila del total general está justo encima de "TIR"
+  const valorPosiciones = parseNum(celda(filaTotal, cabValor.c));
+  const plusvalia = parseNum(celda(filaTotal, cabPlus.c));
+  const capitalAportado = parseNum(celda(bbva.f, bbva.c + 1));
+  const rentabTIR = parseNum(celda(tir.f, tir.c + 1));
+
+  if (!(valorPosiciones > 0) || !(capitalAportado > 0)) throw new Error('Los valores leídos de la hoja no son válidos');
+  return {
+    valorPosiciones,
+    capitalAportado,
+    plusvalia: isNaN(plusvalia) ? null : plusvalia,
+    rentabTIR: isNaN(rentabTIR) ? null : rentabTIR,
+    fecha: new Date().toISOString(),
+  };
+}
+
+function leerCache() {
+  try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch (e) { return null; }
+}
+function guardarCache(d) {
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify(d)); } catch (e) {}
+}
+
+function fmtFecha(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString('es-ES') + ' ' + d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+}
+
+function pintarEstado(mensaje, clase) {
+  const el = document.getElementById('estado-datos');
+  el.textContent = mensaje;
+  el.className = 'subtitle ' + (clase || '');
+}
+
+function aplicarDatos(d, desdeCache, errorMsg) {
+  datos = d;
+  const origen = `Valor actual: ${fmt(d.valorPosiciones)} · Aportado: ${fmt(d.capitalAportado)}` +
+    (d.rentabTIR != null ? ` · TIR: ${fmtPct(d.rentabTIR)}` : '');
+  if (desdeCache) pintarEstado(`⚠️ ${errorMsg}. Usando la última lectura guardada (${fmtFecha(d.fecha)}). ${origen}`, 'aviso');
+  else pintarEstado(`Datos leídos de la hoja "Cartera inversiones" el ${fmtFecha(d.fecha)}. ${origen}`);
+  document.getElementById('contenido').style.display = '';
+  calcular();
+}
+
+async function cargarDatos() {
+  pintarEstado('Leyendo datos de la hoja "Cartera inversiones"…');
+  try {
+    const resp = await fetch(CSV_URL, { cache: 'no-store' });
+    if (!resp.ok) throw new Error('Error ' + resp.status + ' al leer la hoja');
+    const d = extraerDatos(parseCSV(await resp.text()));
+    guardarCache(d);
+    aplicarDatos(d, false);
+  } catch (e) {
+    const cache = leerCache();
+    const msg = 'No se ha podido leer la hoja (' + e.message + ')';
+    if (cache) aplicarDatos(cache, true, msg);
+    else pintarEstado(`❌ ${msg} y no hay datos guardados. Comprueba la conexión y recarga la página.`, 'error');
+  }
+}
+
 function calcular() {
+  if (!datos) return;
+  const valorInicial = datos.valorPosiciones;
+  const capitalAportado = datos.capitalAportado;
   const tasaAnual = parseFloat(document.getElementById('sl-rentab').value) / 100;
   const aportacionMensual = parseFloat(document.getElementById('sl-aport').value);
   const anos = parseInt(document.getElementById('sl-anos').value);
@@ -134,8 +263,8 @@ function calcular() {
   document.getElementById('val-rentab').textContent = (tasaAnual * 100).toFixed(1).replace('.', ',') + '%';
   document.getElementById('val-aport').textContent = aportacionMensual.toLocaleString('es-ES') + ' €';
   document.getElementById('val-anos').textContent = anos + ' año' + (anos > 1 ? 's' : '');
-  let valor = CAPITAL_INICIAL;
-  let totalAportado = CAPITAL_INICIAL;
+  let valor = valorInicial;
+  let totalAportado = capitalAportado;
   const rows = [];
   let totalMeses = 0;
   for (let anio = 1; anio <= anos; anio++) {
@@ -147,15 +276,21 @@ function calcular() {
   }
   const final = rows[rows.length - 1];
   const aportacionesPuras = aportacionMensual * totalMeses;
+  // Plusvalía latente de las posiciones, tal como la calcula la hoja (R16)
+  const plusvaliaActual = datos.plusvalia != null ? datos.plusvalia : valorInicial - capitalAportado;
+  const plusvaliaFutura = final.valor - valorInicial - aportacionesPuras;
   const anoFinal = ANO_INICIO + anos - 1;
   document.getElementById('kpi-aportado').textContent = fmt(final.totalAportado);
   document.getElementById('kpi-valor').textContent = fmt(final.valor);
   document.getElementById('kpi-plus').textContent = fmt(final.plusvalia);
   document.getElementById('kpi-mult').textContent = fmtMult(final.mult);
   document.getElementById('summary-title').textContent = `Resumen al final del período (diciembre ${anoFinal})`;
+  const plusActClass = plusvaliaActual >= 0 ? 'green' : 'red';
   document.getElementById('summary-content').innerHTML = `
-    <div class="summary-row"><span class="summary-label">Capital inicial (celda O21, hoja)</span><span class="summary-val white">${fmt(CAPITAL_INICIAL)}</span></div>
-    <div class="summary-row"><span class="summary-label">Aportaciones mensuales (${totalMeses} meses)</span><span class="summary-val blue">${fmt(aportacionesPuras)}</span></div>
+    <div class="summary-row"><span class="summary-label">Capital aportado hasta hoy</span><span class="summary-val blue">${fmt(capitalAportado)}</span></div>
+    <div class="summary-row"><span class="summary-label">Valor actual de la cartera</span><span class="summary-val white">${fmt(valorInicial)}</span></div>
+    <div class="summary-row"><span class="summary-label">Plusvalía actual</span><span class="summary-val ${plusActClass}">${fmt(plusvaliaActual)}</span></div>
+    <div class="summary-row"><span class="summary-label">Aportaciones futuras (${totalMeses} meses desde ${MESES[MES_INICIO]} ${ANO_INICIO})</span><span class="summary-val blue">${fmt(aportacionesPuras)}</span></div>
     <div class="summary-row"><span class="summary-label">Total dinero aportado</span><span class="summary-val blue">${fmt(final.totalAportado)}</span></div>
     <div class="summary-row"><span class="summary-label">Valor total cartera</span><span class="summary-val white" style="font-size:1.1rem">${fmt(final.valor)}</span></div>
     <div class="summary-row"><span class="summary-label">Plusvalía latente total</span><span class="summary-val green" style="font-size:1.1rem">${fmt(final.plusvalia)}</span></div>
@@ -163,19 +298,21 @@ function calcular() {
     <div class="summary-row"><span class="summary-label">Multiplicador — cada € aportado vale...</span><span class="mult-badge">${fmtMult(final.mult)}</span></div>`;
   const maxV = final.valor;
   document.getElementById('bars').innerHTML = [
-    { label: 'Capital inicial', val: CAPITAL_INICIAL, cls: 'bar-base' },
-    { label: 'Aportaciones mensuales', val: aportacionesPuras, cls: 'bar-aport' },
-    { label: 'Plusvalía generada (interés compuesto)', val: final.plusvalia, cls: 'bar-plus' },
+    { label: 'Valor actual de la cartera', val: valorInicial, cls: 'bar-base' },
+    { label: 'Aportaciones mensuales futuras', val: aportacionesPuras, cls: 'bar-aport' },
+    { label: 'Plusvalía futura (interés compuesto)', val: plusvaliaFutura, cls: 'bar-plus' },
   ].map(item => { const pct = Math.max(0, (item.val / maxV * 100)).toFixed(1); return `<div class="bar-row"><div class="bar-label"><span>${item.label}</span><span>${fmt(item.val)} (${pct}%)</span></div><div class="bar-track"><div class="bar-fill ${item.cls}" style="width:${pct}%"></div></div></div>`; }).join('');
   document.getElementById('table-body').innerHTML = rows.map((r, i) => {
     const isLast = i === rows.length - 1;
     const plusClass = r.plusvalia >= 0 ? 'green' : 'red';
-    const etiquetaAno = r.anio === 1 ? `Año 1 (ago-dic ${ANO_INICIO})` : `Año ${r.anio} (${ANO_INICIO + r.anio - 1})`;
+    const etiquetaAno = r.anio === 1 && MES_INICIO > 0
+      ? `Año 1 (${MESES_CORTOS[MES_INICIO]}-dic ${ANO_INICIO})`
+      : `Año ${r.anio} (${ANO_INICIO + r.anio - 1})`;
     return `<tr class="${isLast ? 'highlight-row' : ''}"><td>${etiquetaAno}</td><td>${fmt(r.totalAportado)}</td><td>${fmt(r.valor)}</td><td class="${plusClass}">${fmt(r.plusvalia)}</td><td class="${plusClass}">${fmtPct(r.rentab)}</td><td class="yellow">${fmtMult(r.mult)}</td></tr>`;
   }).join('');
 }
 ['sl-rentab', 'sl-aport', 'sl-anos'].forEach(id => document.getElementById(id).addEventListener('input', calcular));
-calcular();
+cargarDatos();
 </script>
 </body>
 </html>
