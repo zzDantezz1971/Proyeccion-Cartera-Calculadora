@@ -178,7 +178,7 @@ function parseCSV(texto) {
 }
 
 // Busca los valores por sus etiquetas (no por posición), para que no se rompa si se mueven filas.
-// Equivalen a los intervalos con nombre ValorTotal (Q16), Plusvalia (R16), RentabTIR (S17) y BaseTotal (O18).
+// Equivalen a ValorTotal (Q16), Base Total del total general (O16) y RentabTIR (S17).
 function extraerDatos(filas) {
   const celda = (f, c) => (filas[f] && filas[f][c] != null ? filas[f][c].trim() : '');
   const buscar = etiqueta => {
@@ -188,13 +188,13 @@ function extraerDatos(filas) {
     return null;
   };
   const cabValor = buscar('Valor fondo');
+  const cabBase = buscar('Base Total');
   const tir = buscar('TIR');
-  const bbva = buscar('BBVA:');
-  if (!cabValor || !tir || !bbva) throw new Error('No se encuentran las etiquetas esperadas en la hoja');
+  if (!cabValor || !cabBase || !tir) throw new Error('No se encuentran las etiquetas esperadas en la hoja');
 
   const filaTotal = tir.f - 1; // la fila del total general está justo encima de "TIR"
   const valorPosiciones = parseNum(celda(filaTotal, cabValor.c));
-  const capitalAportado = parseNum(celda(bbva.f, bbva.c + 1));
+  const capitalAportado = parseNum(celda(filaTotal, cabBase.c));
   const rentabTIR = parseNum(celda(tir.f, tir.c + 1));
 
   if (!(valorPosiciones > 0) || !(capitalAportado > 0)) throw new Error('Los valores leídos de la hoja no son válidos');
@@ -226,12 +226,6 @@ function pintarEstado(mensaje, clase) {
 
 function aplicarDatos(d, desdeCache, errorMsg) {
   datos = d;
-  // Rentabilidad inicial = TIR real de la cartera (redondeada al paso del control)
-  if (d.rentabTIR != null) {
-    const sl = document.getElementById('sl-rentab');
-    const v = Math.round(d.rentabTIR * 100 * 2) / 2;
-    sl.value = Math.min(Math.max(v, parseFloat(sl.min)), parseFloat(sl.max));
-  }
   const origen = `Valor actual: ${fmt(d.valorPosiciones)} · Aportado: ${fmt(d.capitalAportado)}` +
     (d.rentabTIR != null ? ` · TIR: ${fmtPct(d.rentabTIR)}` : '');
   if (desdeCache) pintarEstado(`⚠️ ${errorMsg}. Usando la última lectura guardada (${fmtFecha(d.fecha)}). ${origen}`, 'aviso');
