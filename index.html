@@ -188,22 +188,18 @@ function extraerDatos(filas) {
     return null;
   };
   const cabValor = buscar('Valor fondo');
-  const cabBase = buscar('Base Total');
   const tir = buscar('TIR');
   const bbva = buscar('BBVA:');
-  const efectivo = buscar('Efectivo Myinvestor');
-  if (!cabValor || !cabBase || !tir || !bbva) throw new Error('No se encuentran las etiquetas esperadas en la hoja');
+  if (!cabValor || !tir || !bbva) throw new Error('No se encuentran las etiquetas esperadas en la hoja');
 
   const filaTotal = tir.f - 1; // la fila del total general está justo encima de "TIR"
   const valorPosiciones = parseNum(celda(filaTotal, cabValor.c));
   const capitalAportado = parseNum(celda(bbva.f, bbva.c + 1));
   const rentabTIR = parseNum(celda(tir.f, tir.c + 1));
-  const efectivoVal = efectivo ? parseNum(celda(efectivo.f, cabBase.c)) : 0;
 
   if (!(valorPosiciones > 0) || !(capitalAportado > 0)) throw new Error('Los valores leídos de la hoja no son válidos');
   return {
     valorPosiciones,
-    efectivo: isNaN(efectivoVal) ? 0 : efectivoVal,
     capitalAportado,
     rentabTIR: isNaN(rentabTIR) ? null : rentabTIR,
     fecha: new Date().toISOString(),
@@ -236,7 +232,7 @@ function aplicarDatos(d, desdeCache, errorMsg) {
     const v = Math.round(d.rentabTIR * 100 * 2) / 2;
     sl.value = Math.min(Math.max(v, parseFloat(sl.min)), parseFloat(sl.max));
   }
-  const origen = `Valor actual: ${fmt(d.valorPosiciones + d.efectivo)} · Aportado: ${fmt(d.capitalAportado)}` +
+  const origen = `Valor actual: ${fmt(d.valorPosiciones)} · Aportado: ${fmt(d.capitalAportado)}` +
     (d.rentabTIR != null ? ` · TIR: ${fmtPct(d.rentabTIR)}` : '');
   if (desdeCache) pintarEstado(`⚠️ ${errorMsg}. Usando la última lectura guardada (${fmtFecha(d.fecha)}). ${origen}`, 'aviso');
   else pintarEstado(`Datos leídos de la hoja "Cartera inversiones" el ${fmtFecha(d.fecha)}. ${origen}`);
@@ -262,7 +258,7 @@ async function cargarDatos() {
 
 function calcular() {
   if (!datos) return;
-  const valorInicial = datos.valorPosiciones + datos.efectivo;
+  const valorInicial = datos.valorPosiciones;
   const capitalAportado = datos.capitalAportado;
   const tasaAnual = parseFloat(document.getElementById('sl-rentab').value) / 100;
   const aportacionMensual = parseFloat(document.getElementById('sl-aport').value);
@@ -295,7 +291,7 @@ function calcular() {
   const plusActClass = plusvaliaActual >= 0 ? 'green' : 'red';
   document.getElementById('summary-content').innerHTML = `
     <div class="summary-row"><span class="summary-label">Capital aportado hasta hoy</span><span class="summary-val blue">${fmt(capitalAportado)}</span></div>
-    <div class="summary-row"><span class="summary-label">Valor actual de la cartera (incl. efectivo)</span><span class="summary-val white">${fmt(valorInicial)}</span></div>
+    <div class="summary-row"><span class="summary-label">Valor actual de la cartera</span><span class="summary-val white">${fmt(valorInicial)}</span></div>
     <div class="summary-row"><span class="summary-label">Plusvalía actual</span><span class="summary-val ${plusActClass}">${fmt(plusvaliaActual)}</span></div>
     <div class="summary-row"><span class="summary-label">Aportaciones futuras (${totalMeses} meses desde ${MESES[MES_INICIO]} ${ANO_INICIO})</span><span class="summary-val blue">${fmt(aportacionesPuras)}</span></div>
     <div class="summary-row"><span class="summary-label">Total dinero aportado</span><span class="summary-val blue">${fmt(final.totalAportado)}</span></div>
